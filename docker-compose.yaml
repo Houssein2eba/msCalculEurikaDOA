@@ -1,0 +1,92 @@
+services:
+  # Shared MySQL database for the calculator service.
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: calculdb1
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Eureka service registry.
+  eureka:
+    build:
+      context: ./Eureka-Service
+      dockerfile: Dockerfile
+    container_name: eureka-service
+    restart: unless-stopped
+    ports:
+      - "8761:8761"
+
+  # Calculator REST service.
+  calculatrice:
+    build:
+      context: ./Caculatrice-Service
+      dockerfile: Dockerfile
+    container_name: calculatrice-service
+    restart: unless-stopped
+    environment:
+      EUREKA_URL: http://eureka:8761/eureka/
+      EUREKA_INSTANCE_HOSTNAME: calculatrice-service
+      EUREKA_INSTANCE_PREFER_IP_ADDRESS: "true"
+      DB_URL: jdbc:mysql://mysql:3306/calculdb1?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true
+      DB_USERNAME: root
+      DB_PASSWORD: root
+    ports:
+      - "8084:8084"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      eureka:
+        condition: service_started
+
+  # Statistical calculations service.
+  calcul-statistique:
+    build:
+      context: ./CalculStatistique-Service
+      dockerfile: Dockerfile
+    container_name: calculstatistique-service
+    restart: unless-stopped
+    environment:
+      EUREKA_URL: http://eureka:8761/eureka/
+      EUREKA_INSTANCE_HOSTNAME: calculstatistique-service
+      EUREKA_INSTANCE_PREFER_IP_ADDRESS: "true"
+    ports:
+      - "8083:8083"
+    depends_on:
+      eureka:
+        condition: service_started
+
+  # API gateway exposed to the host.
+  gateway:
+    build:
+      context: ./Gateway-Service
+      dockerfile: Dockerfile
+    container_name: gateway-service
+    restart: unless-stopped
+    environment:
+      EUREKA_URL: http://eureka:8761/eureka/
+      EUREKA_INSTANCE_HOSTNAME: gateway-service
+      EUREKA_INSTANCE_PREFER_IP_ADDRESS: "true"
+    ports:
+      - "8181:8181"
+    depends_on:
+      eureka:
+        condition: service_started
+      calculatrice:
+        condition: service_started
+      calcul-statistique:
+        condition: service_started
+
+# Named volume persists MySQL data across container recreations.
+volumes:
+  mysql-data:

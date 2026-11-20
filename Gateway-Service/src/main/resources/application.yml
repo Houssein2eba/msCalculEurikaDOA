@@ -1,0 +1,35 @@
+server:
+  port: 8181
+
+spring:
+  application:
+    name: Gateway-Service
+
+  cloud:
+    gateway:
+      server:
+        webflux:
+          routes:
+            - id: calculatrice-service
+              uri: lb://CALCULATRICE-SERVICE
+              predicates:
+                - Path=/calculatrice-service/**
+              filters:
+                - StripPrefix=1
+
+            - id: calculstatistique-service
+              uri: lb://CALCULSTATISTIQUE-SERVICE
+              predicates:
+                - Path=/calculstatistique-service/**
+              filters:
+                - StripPrefix=1
+
+          discovery:
+            locator:
+              enabled: true
+              lower-case-service-id: true
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka/}
