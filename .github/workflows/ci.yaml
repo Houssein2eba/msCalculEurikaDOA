@@ -114,7 +114,24 @@ jobs:
           DB_URL: jdbc:mysql://127.0.0.1:3307/calculdb1?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true
           DB_USERNAME: root
           DB_PASSWORD: root
-        run: mvn -B clean verify
+        run: |
+          $wrapper = Join-Path (Get-Location) "mvnw.cmd"
+          if ((Test-Path $wrapper) -and (Get-Item $wrapper).Length -gt 0) {
+            & $wrapper -B clean verify
+            exit $LASTEXITCODE
+          }
+
+          $maven = Get-Command mvn.cmd -ErrorAction SilentlyContinue
+          if (-not $maven) {
+            $maven = Get-Command mvn -ErrorAction SilentlyContinue
+          }
+
+          if (-not $maven) {
+            throw "Neither a valid Maven wrapper nor Maven on PATH was found."
+          }
+
+          & $maven.Source -B clean verify
+          exit $LASTEXITCODE
 
       - name: Stop MySQL
         if: always()
