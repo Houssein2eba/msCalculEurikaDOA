@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-main-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration-tests:
+    name: Integration tests (${{ matrix.service }})
+    runs-on: ubuntu-latest
+
+    # Provide MySQL for the calculator context test and keep all module tests consistent.
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: calculdb1
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    strategy:
+      fail-fast: true
+      matrix:
+        service:
+          - Eureka-Service
+          - Caculatrice-Service
+          - CalculStatistique-Service
+          - Gateway-Service
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Run Maven integration tests
+        working-directory: ${{ matrix.service }}
+        env:
+          DB_URL: jdbc:mysql://127.0.0.1:3306/calculdb1?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true
+          DB_USERNAME: root
+          DB_PASSWORD: root
+        run: |
+          chmod +x mvnw
+          ./mvnw -B clean verify
+
+  docker-integration:
+    name: Docker integration smoke test
+    runs-on: ubuntu-latest
+    needs: integration-tests
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Start application stack
+        run: docker compose up --build -d
+
+      - name: Wait for Eureka
+        run: |
+          curl --fail --retry 60 --retry-delay 2 --retry-all-errors \
+            http://localhost:8761/
+
+      - name: Wait for calculator service
+        run: |
+          curl --fail --retry 60 --retry-delay 2 --retry-all-errors \
+            http://localhost:8084/api/calcul/test
+
+      - name: Wait for gateway
+        run: |
+          curl --fail --retry 60 --retry-delay 2 --retry-all-errors \
+            http://localhost:8181/actuator/health
+
+      - name: Verify calculator through gateway
+        run: |
+          result="$(curl --fail --retry 30 --retry-delay 2 --retry-all-errors \
+            'http://localhost:8181/calculatrice-service/api/calcul/somme?a=2&b=3')"
+          test "$result" = "5.0"
+
+      - name: Verify statistics through gateway
+        run: |
+          result="$(curl --fail --retry 30 --retry-delay 2 --retry-all-errors \
+            'http://localhost:8181/calculstatistique-service/api/stats/moyenne?a=2&b=4')"
+          test "$result" = "3.0"
+
+      - name: Show service status on failure
+        if: failure()
+        run: docker compose ps
+
+      - name: Stop application stack
+        if: always()
+        run: docker compose down --volumes
