@@ -1,6 +1,11 @@
 name: CI
 
+# Run CI for pull requests targeting main and pushes to main.
+# Manual runs are also available from the Actions tab.
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
@@ -9,32 +14,22 @@ on:
 permissions:
   contents: read
 
+# Avoid overlapping runs for the same pull request or branch.
 concurrency:
-  group: ci-main-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  integration-tests:
+  ci:
     name: Integration tests (${{ matrix.service }})
-    runs-on: ubuntu-latest
-
-    # Provide MySQL for the calculator context test and keep all module tests consistent.
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_DATABASE: calculdb1
-          MYSQL_ROOT_PASSWORD: root
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
+    runs-on:
+      - self-hosted
+      - Windows
+      - X64
 
     strategy:
       fail-fast: true
+      max-parallel: 1
       matrix:
         service:
           - Eureka-Service
@@ -42,70 +37,157 @@ jobs:
           - CalculStatistique-Service
           - Gateway-Service
 
+    defaults:
+      run:
+        shell: powershell
+
     steps:
-      - name: Check out source
+      # Checkout the exact merge commit or pushed commit.
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-          cache: maven
+      # Use the JDK already installed on the self-hosted Windows runner.
+      - name: Verify local Java 17
+        run: |
+          $candidates = @()
 
-      - name: Run Maven integration tests
+          # Add JAVA_HOME first because it is the explicit runner JDK configuration.
+          if ($env:JAVA_HOME) {
+            $candidates += $env:JAVA_HOME
+          }
+
+          # Add the JDK directory inferred from javac on PATH as a fallback.
+          $javacCommand = Get-Command javac.exe -ErrorAction SilentlyContinue
+          if ($javacCommand) {
+            $jdkFromPath = Split-Path (Split-Path $javacCommand.Source -Parent) -Parent
+            $candidates += $jdkFromPath
+          }
+
+          $jdkHome = $null
+          foreach ($candidate in ($candidates | Select-Object -Unique)) {
+            $javac = Join-Path $candidate "bin\javac.exe"
+            if (-not (Test-Path $javac)) {
+              continue
+            }
+
+            $versionOutput = (& $javac -version 2>&1 | Out-String).Trim()
+            if ($versionOutput -match "^javac\s+17(?:\.|$)") {
+              $jdkHome = (Resolve-Path $candidate).Path
+              break
+            }
+          }
+
+          if (-not $jdkHome) {
+            throw "Java 17 JDK not found. Set JAVA_HOME or add javac.exe to PATH on this runner."
+          }
+
+          # Export the JDK location and executable directory to subsequent steps.
+          "JAVA_HOME=$jdkHome" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PATH=$jdkHome\bin;$env:PATH" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+          Write-Host "Using local JDK: $jdkHome"
+          & "$jdkHome\bin\java.exe" -version
+
+      # Fail early when Docker is unavailable on the runner.
+      - name: Check Docker
+        run: docker --version
+
+      # services: containers are Linux-only, so start MySQL explicitly for this Windows runner.
+      - name: Start MySQL
+        run: docker compose up -d mysql
+
+      - name: Wait for MySQL
+        run: |
+          for ($attempt = 1; $attempt -le 30; $attempt++) {
+            docker compose exec -T mysql mysqladmin ping -h 127.0.0.1 -proot
+            if ($LASTEXITCODE -eq 0) {
+              exit 0
+            }
+            Start-Sleep -Seconds 2
+          }
+          throw "MySQL did not become ready"
+
+      # The working-directory option avoids changing directories with cd.
+      - name: Run integration tests
         working-directory: ${{ matrix.service }}
         env:
-          DB_URL: jdbc:mysql://127.0.0.1:3306/calculdb1?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true
+          DB_URL: jdbc:mysql://127.0.0.1:3307/calculdb1?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true
           DB_USERNAME: root
           DB_PASSWORD: root
         run: |
-          chmod +x mvnw
-          ./mvnw -B clean verify
+          $wrapper = Join-Path (Get-Location) "mvnw.cmd"
+          if ((Test-Path $wrapper) -and (Get-Item $wrapper).Length -gt 0) {
+            & $wrapper -B clean verify
+            exit $LASTEXITCODE
+          }
+
+          $maven = Get-Command mvn.cmd -ErrorAction SilentlyContinue
+          if (-not $maven) {
+            $maven = Get-Command mvn -ErrorAction SilentlyContinue
+          }
+
+          if (-not $maven) {
+            throw "Neither a valid Maven wrapper nor Maven on PATH was found."
+          }
+
+          & $maven.Source -B clean verify
+          exit $LASTEXITCODE
+
+      - name: Stop MySQL
+        if: always()
+        run: docker compose stop mysql
 
   docker-integration:
     name: Docker integration smoke test
-    runs-on: ubuntu-latest
-    needs: integration-tests
+    needs: ci
+    runs-on:
+      - self-hosted
+      - Windows
+      - X64
+
+    defaults:
+      run:
+        shell: powershell
 
     steps:
-      - name: Check out source
+      # Build and test the complete application stack.
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Start application stack
         run: docker compose up --build -d
 
       - name: Wait for Eureka
-        run: |
-          curl --fail --retry 60 --retry-delay 2 --retry-all-errors \
-            http://localhost:8761/
+        run: curl.exe --fail --retry 60 --retry-delay 2 --retry-all-errors http://localhost:8761/
 
       - name: Wait for calculator service
-        run: |
-          curl --fail --retry 60 --retry-delay 2 --retry-all-errors \
-            http://localhost:8084/api/calcul/test
+        run: curl.exe --fail --retry 60 --retry-delay 2 --retry-all-errors http://localhost:8084/api/calcul/test
 
       - name: Wait for gateway
-        run: |
-          curl --fail --retry 60 --retry-delay 2 --retry-all-errors \
-            http://localhost:8181/actuator/health
+        run: curl.exe --fail --retry 60 --retry-delay 2 --retry-all-errors http://localhost:8181/actuator/health
 
       - name: Verify calculator through gateway
         run: |
-          result="$(curl --fail --retry 30 --retry-delay 2 --retry-all-errors \
-            'http://localhost:8181/calculatrice-service/api/calcul/somme?a=2&b=3')"
-          test "$result" = "5.0"
+          $result = (curl.exe --fail --retry 30 --retry-delay 2 --retry-all-errors `
+            "http://localhost:8181/calculatrice-service/api/calcul/somme?a=2&b=3")
+          if ($result -ne "5.0") {
+            throw "Expected 5.0, received '$result'"
+          }
 
       - name: Verify statistics through gateway
         run: |
-          result="$(curl --fail --retry 30 --retry-delay 2 --retry-all-errors \
-            'http://localhost:8181/calculstatistique-service/api/stats/moyenne?a=2&b=4')"
-          test "$result" = "3.0"
+          $result = (curl.exe --fail --retry 30 --retry-delay 2 --retry-all-errors `
+            "http://localhost:8181/calculstatistique-service/api/stats/moyenne?a=2&b=4")
+          if ($result -ne "3.0") {
+            throw "Expected 3.0, received '$result'"
+          }
 
+      # Preserve Docker status output for failed integration runs.
       - name: Show service status on failure
         if: failure()
         run: docker compose ps
 
+      # Always remove containers and the test database volume.
       - name: Stop application stack
         if: always()
         run: docker compose down --volumes
