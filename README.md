@@ -150,8 +150,9 @@ Do not put the token in the README, source code, or a committed `.env` file.
 The workflow is [.github/workflows/ci.yaml](.github/workflows/ci.yaml).
 
 - A pull request targeting `main` runs the Java tests and Docker integration checks but does not publish images.
-- A push to `main` runs the same checks. If all checks pass, the workflow publishes the tested service images to `houssein2eba/mscalcul-eurika-doa`.
-- You can also open **Actions → CI → Run workflow** and select `main`.
+- A push to `main` runs the same checks. If all checks pass, the workflow publishes only the images for services whose `src/main/**`, `pom.xml`, or `Dockerfile` changed to `houssein2eba/mscalcul-eurika-doa`.
+- Changes to documentation, tests, or workflow files do not publish images. You can manually publish the current `main` images by opening **Actions → CI → Run workflow** and selecting `main`.
+- Before gateway smoke tests, the Docker integration job waits for the calculator services to register with Eureka. If startup still fails, the workflow prints the related service logs.
 
 The image tags include the commit SHA, for example `eureka-<sha>` and `gateway-<sha>`, plus moving `*-latest` tags. Check the workflow run in the **Actions** tab for test and publish results.
 

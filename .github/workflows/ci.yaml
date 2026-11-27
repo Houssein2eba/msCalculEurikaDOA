@@ -156,6 +156,48 @@ jobs:
       # Build and test the complete application stack.
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect application image changes
+        id: image_changes
+        env:
+          PUSH_BASE_SHA: ${{ github.event.before }}
+        run: |
+          $publishAll = $false
+          $changedFiles = @()
+
+          if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch" -or
+              -not $env:PUSH_BASE_SHA -or
+              $env:PUSH_BASE_SHA -match "^0+$") {
+            $publishAll = $true
+          }
+          else {
+            $changedFiles = @(git diff --no-renames --name-only $env:PUSH_BASE_SHA $env:GITHUB_SHA)
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not compare the pushed commit with its base."
+            }
+          }
+
+          $servicePatterns = [ordered]@{
+            eureka = '^Eureka-Service/(src/main/|pom\.xml$|Dockerfile$)'
+            calculatrice = '^Caculatrice-Service/(src/main/|pom\.xml$|Dockerfile$)'
+            calcul_statistique = '^CalculStatistique-Service/(src/main/|pom\.xml$|Dockerfile$)'
+            gateway = '^Gateway-Service/(src/main/|pom\.xml$|Dockerfile$)'
+          }
+          $publishAny = $false
+
+          foreach ($service in $servicePatterns.Keys) {
+            $publishService = $publishAll -or [bool]($changedFiles |
+              Where-Object { $_ -match $servicePatterns[$service] } |
+              Select-Object -First 1)
+            $publishValue = $publishService.ToString().ToLowerInvariant()
+            "$service=$publishValue" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            $publishAny = $publishAny -or $publishService
+          }
+
+          "publish_any=$($publishAny.ToString().ToLowerInvariant())" |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Start application stack
         run: docker compose up --build -d
@@ -169,9 +211,34 @@ jobs:
       - name: Wait for gateway
         run: curl.exe --fail --retry 60 --retry-delay 2 --retry-all-errors http://localhost:8181/actuator/health
 
+      - name: Wait for calculator services to register with Eureka
+        run: |
+          $requiredApps = @("CALCULATRICE-SERVICE", "CALCULSTATISTIQUE-SERVICE")
+          $missingApps = $requiredApps
+
+          for ($attempt = 1; $attempt -le 60; $attempt++) {
+            $registryResponse = (& curl.exe --silent --show-error --fail `
+              -H "Accept: application/json" `
+              http://localhost:8761/eureka/apps | Out-String)
+            if ($LASTEXITCODE -eq 0) {
+              $registry = $registryResponse | ConvertFrom-Json
+              $registeredApps = @($registry.applications.application |
+                ForEach-Object { ([string]$_.name).ToUpperInvariant() })
+              $missingApps = @($requiredApps |
+                Where-Object { $registeredApps -notcontains $_ })
+              if ($missingApps.Count -eq 0) {
+                exit 0
+              }
+            }
+
+            Start-Sleep -Seconds 2
+          }
+
+          throw "Eureka did not register the required services: $($missingApps -join ', ')"
+
       - name: Verify calculator through gateway
         run: |
-          $result = (curl.exe --fail --retry 30 --retry-delay 2 --retry-all-errors `
+          $result = (curl.exe --silent --show-error --fail --retry 60 --retry-delay 2 --retry-all-errors `
             "http://localhost:8181/calculatrice-service/api/calcul/somme?a=2&b=3")
           if ($result -ne "5.0") {
             throw "Expected 5.0, received '$result'"
@@ -179,14 +246,14 @@ jobs:
 
       - name: Verify statistics through gateway
         run: |
-          $result = (curl.exe --fail --retry 30 --retry-delay 2 --retry-all-errors `
+          $result = (curl.exe --silent --show-error --fail --retry 60 --retry-delay 2 --retry-all-errors `
             "http://localhost:8181/calculstatistique-service/api/stats/moyenne?a=2&b=4")
           if ($result -ne "3.0") {
             throw "Expected 3.0, received '$result'"
           }
 
       - name: Verify Docker Hub credentials are configured
-        if: success() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        if: success() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.image_changes.outputs.publish_any == 'true'
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -196,21 +263,40 @@ jobs:
           }
 
       - name: Log in to Docker Hub
-        if: success() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        if: success() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.image_changes.outputs.publish_any == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Publish tested images to Docker Hub
-        if: success() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        if: success() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.image_changes.outputs.publish_any == 'true'
+        env:
+          PUBLISH_EUREKA: ${{ steps.image_changes.outputs.eureka }}
+          PUBLISH_CALCULATRICE: ${{ steps.image_changes.outputs.calculatrice }}
+          PUBLISH_CALCUL_STATISTIQUE: ${{ steps.image_changes.outputs.calcul_statistique }}
+          PUBLISH_GATEWAY: ${{ steps.image_changes.outputs.gateway }}
         run: |
-          docker compose push eureka calculatrice calcul-statistique gateway
-          if ($LASTEXITCODE -ne 0) {
-            throw "Pushing commit-tagged images to Docker Hub failed."
+          $servicesToPublish = @()
+          if ($env:PUBLISH_EUREKA -eq "true") {
+            $servicesToPublish += "eureka"
+          }
+          if ($env:PUBLISH_CALCULATRICE -eq "true") {
+            $servicesToPublish += "calculatrice"
+          }
+          if ($env:PUBLISH_CALCUL_STATISTIQUE -eq "true") {
+            $servicesToPublish += "calcul-statistique"
+          }
+          if ($env:PUBLISH_GATEWAY -eq "true") {
+            $servicesToPublish += "gateway"
           }
 
-          foreach ($service in @("eureka", "calculatrice", "calcul-statistique", "gateway")) {
+          foreach ($service in $servicesToPublish) {
+            docker compose push $service
+            if ($LASTEXITCODE -ne 0) {
+              throw "Pushing the $service commit-tagged image to Docker Hub failed."
+            }
+
             $commitImage = "$env:DOCKERHUB_REPOSITORY`:$service-$env:IMAGE_TAG"
             $latestImage = "$env:DOCKERHUB_REPOSITORY`:$service-latest"
             docker image tag $commitImage $latestImage
@@ -227,7 +313,9 @@ jobs:
       # Preserve Docker status output for failed integration runs.
       - name: Show service status on failure
         if: failure()
-        run: docker compose ps
+        run: |
+          docker compose ps
+          docker compose logs --no-color --tail 100 eureka calculatrice calcul-statistique gateway
 
       # Always remove containers and the test database volume.
       - name: Stop application stack
