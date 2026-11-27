@@ -19,6 +19,7 @@ services:
 
   # Eureka service registry.
   eureka:
+    image: ${DOCKERHUB_REPOSITORY:-local/mscalcul-eurika-doa}:eureka-${IMAGE_TAG:-dev}
     build:
       context: ./Eureka-Service
       dockerfile: Dockerfile
@@ -29,6 +30,7 @@ services:
 
   # Calculator REST service.
   calculatrice:
+    image: ${DOCKERHUB_REPOSITORY:-local/mscalcul-eurika-doa}:calculatrice-${IMAGE_TAG:-dev}
     build:
       context: ./Caculatrice-Service
       dockerfile: Dockerfile
@@ -51,6 +53,7 @@ services:
 
   # Statistical calculations service.
   calcul-statistique:
+    image: ${DOCKERHUB_REPOSITORY:-local/mscalcul-eurika-doa}:calcul-statistique-${IMAGE_TAG:-dev}
     build:
       context: ./CalculStatistique-Service
       dockerfile: Dockerfile
@@ -68,6 +71,7 @@ services:
 
   # API gateway exposed to the host.
   gateway:
+    image: ${DOCKERHUB_REPOSITORY:-local/mscalcul-eurika-doa}:gateway-${IMAGE_TAG:-dev}
     build:
       context: ./Gateway-Service
       dockerfile: Dockerfile

@@ -144,6 +144,9 @@ jobs:
       - self-hosted
       - Windows
       - X64
+    env:
+      DOCKERHUB_REPOSITORY: houssein2eba/mscalcul-eurika-doa
+      IMAGE_TAG: ${{ github.sha }}
 
     defaults:
       run:
@@ -180,6 +183,59 @@ jobs:
             "http://localhost:8181/calculstatistique-service/api/stats/moyenne?a=2&b=4")
           if ($result -ne "3.0") {
             throw "Expected 3.0, received '$result'"
+          }
+
+      - name: Publish tested images to Docker Hub
+        if: success() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if (-not $env:DOCKERHUB_USERNAME -or -not $env:DOCKERHUB_TOKEN) {
+            throw "Set the DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets."
+          }
+
+          $dockerConfig = Join-Path $env:RUNNER_TEMP ("docker-config-" + [guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $dockerConfig | Out-Null
+          $previousDockerConfig = $env:DOCKER_CONFIG
+          $env:DOCKER_CONFIG = $dockerConfig
+
+          try {
+            $env:DOCKERHUB_TOKEN | docker login --username $env:DOCKERHUB_USERNAME --password-stdin
+            if ($LASTEXITCODE -ne 0) {
+              throw "Docker Hub login failed."
+            }
+
+            docker compose push eureka calculatrice calcul-statistique gateway
+            if ($LASTEXITCODE -ne 0) {
+              throw "Pushing commit-tagged images to Docker Hub failed."
+            }
+
+            foreach ($service in @("eureka", "calculatrice", "calcul-statistique", "gateway")) {
+              $commitImage = "$env:DOCKERHUB_REPOSITORY`:$service-$env:IMAGE_TAG"
+              $latestImage = "$env:DOCKERHUB_REPOSITORY`:$service-latest"
+              docker image tag $commitImage $latestImage
+              if ($LASTEXITCODE -ne 0) {
+                throw "Tagging $commitImage as $latestImage failed."
+              }
+
+              docker push $latestImage
+              if ($LASTEXITCODE -ne 0) {
+                throw "Pushing $latestImage to Docker Hub failed."
+              }
+            }
+          }
+          finally {
+            if ($previousDockerConfig) {
+              $env:DOCKER_CONFIG = $previousDockerConfig
+            }
+            else {
+              Remove-Item Env:DOCKER_CONFIG -ErrorAction SilentlyContinue
+            }
+
+            if (Test-Path $dockerConfig) {
+              Remove-Item -LiteralPath $dockerConfig -Recurse -Force
+            }
           }
 
       # Preserve Docker status output for failed integration runs.
