@@ -1,262 +1,158 @@
+# msCalculEurikaDOA
 
+A Java 17 microservices project with Eureka service discovery, a Spring Cloud Gateway, and MySQL. Docker Compose runs the complete application. GitHub Actions tests the services and publishes Docker images to Docker Hub after successful checks on `main`.
 
-# Architecture Microservices et Préparation du Pipeline DevOps
-## Objectif
-préparer la mise en place d'un pipeline DevOps à travers le déploiement et l'exécution d'une architecture microservices basée sur Spring Boot et Spring Cloud (vue en MPI1)
-Cette activité permettra aux étudiants de (d') :
-Utiliser Git et GitHub pour la gestion du code source.
-Se rappeler du fonctionnement d'une architecture microservices et 
-Se rappeler de la mise en œuvre un serveur de découverte de services avec Eureka.
-Se rappeler de la configuration d'une passerelle d'accès avec Spring Cloud Gateway.
-Construire des applications Java avec Maven.
-Générer les fichiers exécutables JAR.
-Vérifier la communication entre les différents microservices.
-Préparer les étapes du pipeline DevOps : Build, Test, Package et Déploiement.
-Préparer l'intégration future de Docker et des outils CI/CD.
-Cette activité constitue la première étape vers la mise en œuvre d'une chaîne d'intégration et de déploiement continus (CI/CD).
+## Services and local URLs
 
-### Prérequis
+| Service | Port | Example |
+| --- | ---: | --- |
+| Eureka registry | 8761 | <http://localhost:8761> |
+| Calculator | 8084 | <http://localhost:8084/api/calcul/somme?a=2&b=3> |
+| Statistics | 8083 | <http://localhost:8083/api/stats/moyenne?a=2&b=4> |
+| API gateway | 8181 | <http://localhost:8181/actuator/health> |
 
-Avant de commencer, assurez-vous d'avoir installé :
+Through the gateway:
 
-- Java JDK 17 ou version supérieure
-- Apache Maven 3.9 ou version supérieure
+- Calculator: <http://localhost:8181/calculatrice-service/api/calcul/somme?a=2&b=3>
+- Statistics: <http://localhost:8181/calculstatistique-service/api/stats/moyenne?a=2&b=4>
+
+## Requirements
+
 - Git
-- IntelliJ IDEA ou Visual Studio Code
+- Java JDK 17
+- Docker Desktop with the Linux container engine and Docker Compose v2
+- A terminal (the commands below use Windows PowerShell)
 
-# CODE
-Développement des microservices :
-Eureka-Service
-Calculatrice-Service
-CalculStatistique-Service
-Gateway-Service
+Each service includes a Maven wrapper, so a separate Maven installation is not required.
 
-Dans votre cas, vous les avez développés l'année dernière.
+## 1. Clone the repository
 
-Je vous les repartage via ce dépôt GitHub afin que vous puissiez les conserver dans votre espace, au cas où le travail réalisé l'année dernière aurait été perdu.
+```powershell
+git clone https://github.com/Houssein2eba/msCalculEurikaDOA.git
+cd msCalculEurikaDOA
+```
 
+## 2. Run the services locally
 
-Avec IntelliJ IDEA : Ouvrir le projet puis exécuter la classe principale du microservice à l'aide du bouton Run.
+This runs the Java services on your computer and uses a MySQL container for the database.
 
-Avec VS Code : installez les extensions suivantes : Extension Pack for Java ; Spring Boot Extension Pack ; Maven for Java
+1. Start Docker Desktop and start MySQL from the repository root:
 
-Sans IDE :
+   ```powershell
+   docker compose up -d mysql
+   ```
 
-### Linux / macOS	
-    ./mvnw clean install
-    chmod +x mvnw ./mvnw spring-boot:run
+2. Open four PowerShell terminals in the repository. Start Eureka first:
 
-  
-### Windows (CMD)	
-    mvnw.cmd clean install
-    mvnw.cmd spring-boot:run
-    
-# BUILD
-    mvn clean package
- Chaque étudiant construire le fichier JAR pour chaque microservice
-des fichiers JAR seront créer
-Par exemple : Calculatrice-Service-0.0.1-SNAPSHOT.jar
-    
-# TEST
-   ## Lancer sans utilisation de conteneur
+   ```powershell
+   cd .\Eureka-Service
+   .\mvnw.cmd spring-boot:run
+   ```
 
-   java -jar target/Eureka-Service-0.0.1-SNAPSHOT.jar
-   
-      Eureka-Service
-        http://localhost:8761
-                http://localhost:8084/api/calcul/somme?a=10&b=20
-                
-      Calculatrice-Service  
-        Rappel : en local activer mysql et si le tableau /calculdb1 existe effacer le a chaque test
-        http://localhost:8084/api/calcul/somme?a=10&b=20
-        
-    CalculStatistique-Service
-        http://localhost:8083/api/stats/moyenne?a=10&b=20
-    Gateway-Service
-        http://localhost:8181/calculatrice-service/api/calcul/somme?a=10&b=20
+3. In a second terminal, start the calculator. Its database settings match the MySQL container above:
 
+   ```powershell
+   cd .\Caculatrice-Service
+   $env:DB_URL = "jdbc:mysql://localhost:3307/calculdb1?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true"
+   $env:DB_USERNAME = "root"
+   $env:DB_PASSWORD = "root"
+   .\mvnw.cmd spring-boot:run
+   ```
 
-# RELEASE
-Chaque microservice doit contenir :
+4. In a third terminal, start the statistics service:
 
-Le fichier JAR généré précédemment sera utilisé pour conteneuriser et déployer l'application à l'aide de Docker.
-Créer un Dockerfile pour chaque microservice au même niveau que le pom.xml
+   ```powershell
+   cd .\CalculStatistique-Service
+   .\mvnw.cmd spring-boot:run
+   ```
 
+5. In a fourth terminal, start the gateway:
 
-   ## Lancer avec utilisation de conteneur
-    Remarque :il faut activer docker   
-   
-   Il faut buileder les images, il faut utiliser Dockerfile
+   ```powershell
+   cd .\Gateway-Service
+   .\mvnw.cmd spring-boot:run
+   ```
 
-#### Exemple Dockerfile
-    FROM eclipse-temurin:17-jdk
-    WORKDIR /app
-    COPY target/*.jar app.jar
-    EXPOSE 8080
-    ENTRYPOINT ["java","-jar","app.jar"]
+The services use `http://localhost:8761/eureka/` by default. Allow time for Eureka and the services to start and register before testing the gateway URLs above.
 
-#### Construction de l'image Docker
-       docker build -t calculatrice-service .
+To stop the local Java services, press `Ctrl+C` in each terminal. Stop MySQL with:
 
-Par la suite ce build sera déclaré dans Docker Compose
-       calculstatistique-service:
-          build: ./CalculStatistique-Service
-       
-#### Vérification de l'image
-    docker images
+```powershell
+docker compose stop mysql
+```
 
-### Mode Bridge
-   
-        docker network ls
-        docker network create micro-net
-        docker run -d --network micro-net --name eureka-server -p 8761:8761 eureka-service
-    
-   ####  Eureka-Service
-        http://localhost:8761
-   #### Calculatrice-Service   
-      
-    docker run -d --network micro-net --name mysql -p 3306:3306 -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=calculdb1 mysql:8.0
-    
-    docker run -d --network micro-net --name calculatrice-service -p 8084:8084 -e EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka-server:8761/eureka/ -e SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/calculdb1?createDatabaseIfNotExist=true -e SPRING_DATASOURCE_USERNAME=root -e SPRING_DATASOURCE_PASSWORD=root calculatrice-service
-      
-        http://localhost:8084/api/calcul/somme?a=10&b=20
-        
-   #### CalculStatistique-Service
-    docker run -d --network micro-net --name calculstatistique-service -p 8083:8083 -e EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka-server:8761/eureka/ calculstatistique-service
-    
-        http://localhost:8083/api/stats/moyenne?a=10&b=20
-  ####  Gateway-Service
+## 3. Run the complete application with Docker
 
-        docker run -d --network micro-net --name gateway-service -p 8181:8181 -e EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka-server:8761/eureka/ gateway-service
-        
-        http://localhost:8181/calculatrice-service/api/calcul/somme?a=10&b=20
+From the repository root, with Docker Desktop running:
 
-        
-        docker inspect gateway-service | findstr EUREKA  
-        
-        docker exec -it gateway-service printenv
-        
-        ajouter dans dockerfile de gateway
- ####
-    eureka:
-      client:
-        service-url:
-          defaultZone: http://localhost:8761/eureka/
-        
-        docker rm -f gateway-service
-        docker ps -a
-        docker rmi -f gateway-service
-        docker image ls
-       
-       cd ga*
-       mvn clean package -DskipTests
-       dir target
-       docker build -t gateway-service .
-       docker image ls
-    
+```powershell
+docker compose up --build -d
+docker compose ps
+```
 
-        docker run -d --network micro-net --name gateway-service -p 8181:8181 -e EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka-server:8761/eureka/ gateway-service
+Open the service URLs listed above. To inspect logs:
 
-        docker logs -f gateway-service
+```powershell
+docker compose logs -f
+```
 
-        http://localhost:8181/calculatrice-service/api/calcul/somme?a=10&b=20
-        http://localhost:8181/calculstatistique-service/api/stats/moyenne?a=10&b=20
+Stop the stack and keep the MySQL data:
 
-        http://localhost:8181/actuator/gateway/routes
+```powershell
+docker compose down
+```
 
-#### Arrêter les conteneurs lancés manuellement
-    docker rm -f gateway-service calculstatistique-service calculatrice-service mysql eureka-server
-    
+To also delete the MySQL data volume and start with an empty database next time:
 
+```powershell
+docker compose down --volumes
+```
 
-# DEPLOY
-Le fichier docker-compose.yml est unique et placé à la racine.
+Compose builds local images with a `dev` tag by default. No `.env` file is required for the default local setup.
 
-## Exemple docker-compose.yml
-    docker compose up -d
-    
-les conteneurs seront réellement lancés.
+## 4. Set up a self-hosted GitHub Actions runner (Windows)
 
-## d'autres cmd
-    docker restart calculatrice-service
-    docker exec -it gateway-service printenv
-    docker compose logs gateway-service
-    docker logs gateway-service
-    docker compose build --no-cache gateway-service
-    docker compose stop  
-    docker compose down  
+The workflow targets a runner labelled `self-hosted`, `Windows`, and `X64`. Set it up on a Windows machine that has:
 
+- JDK 17 installed, with `JAVA_HOME` configured
+- Docker Desktop running in Linux container mode
+- Network access to GitHub, Maven repositories, and Docker Hub
 
+The Maven wrapper is included in each service. Confirm Docker is available in the runner's Windows account:
 
-# PIPLINE CI
+```powershell
+docker --version
+docker compose version
+docker info --format '{{.OSType}}'
+```
 
-# GitHub Actions permet d'automatiser les étapes précédentes : Build, Test, Release, Déploiement
-compile les 4 projets ;
-construit les images Docker ;
-lance les conteneurs ;
-affiche les logs d'Eureka ;
-arrête les conteneurs.
+The last command should print `linux`.
 
-Après la réussite des tests d'intégration sur `main`, le workflow publie les quatre images applicatives dans `houssein2eba/mscalcul-eurika-doa`. Ajoutez les secrets `DOCKERHUB_USERNAME` et `DOCKERHUB_TOKEN` dans les paramètres Actions du dépôt. Chaque image reçoit un tag de commit (`eureka-<sha>`, `calculatrice-<sha>`, `calcul-statistique-<sha>` ou `gateway-<sha>`) ainsi qu'un tag `*-latest`.
+In the GitHub repository, open **Settings → Actions → Runners → New self-hosted runner**, select **Windows** and **x64**, then follow GitHub's displayed instructions to download, configure, and start the runner. Run the generated `config.cmd` command with the short-lived registration token from that page, then start the runner with:
 
-Depuis la racine du projet :
+```powershell
+.\run.cmd
+```
 
+Keep the runner running while a workflow is queued or executing. Do not commit the registration token or runner credentials.
 
-mkdir .github\workflows
-Puis créez le fichier :
- .github\workflows\ci.yml
+## 5. Configure Docker Hub publishing
 
- git remote -v
-Sinon
-git remote set-url origin https://github.com/Zayanifss/msCalculEurikaDOA.git
+In the repository, open **Settings → Secrets and variables → Actions → New repository secret** and add:
 
-Récupérer le token profil / SettingsDeveloper Settings / token classic / generete / New personal access token (classic /repo
-git branch
+- `DOCKERHUB_USERNAME`: your Docker Hub username (`houssein2eba`)
+- `DOCKERHUB_TOKEN`: a Docker Hub access token with read and write permissions
 
-git pull origin main --allow-unrelated-histories
+Do not put the token in the README, source code, or a committed `.env` file.
 
-git status
+## 6. Run and check the CI/CD workflow
 
+The workflow is [.github/workflows/ci.yaml](.github/workflows/ci.yaml).
 
-git add .
-git commit -m "Ajout GitHub Actions CI"
-git push
+- A pull request targeting `main` runs the Java tests and Docker integration checks but does not publish images.
+- A push to `main` runs the same checks. If all checks pass, the workflow publishes the tested service images to `houssein2eba/mscalcul-eurika-doa`.
+- You can also open **Actions → CI → Run workflow** and select `main`.
 
-Ouvrez le dépôt msCalculEurikaDOA-CI
-Cliquez sur Actions
+The image tags include the commit SHA, for example `eureka-<sha>` and `gateway-<sha>`, plus moving `*-latest` tags. Check the workflow run in the **Actions** tab for test and publish results.
 
-## Remarque
-À partir du pipeline DevOps
-
-Dans GitHub Actions, GitLab CI ou Jenkins, le pipeline peut générer automatiquement :
-
-la version du JAR
-l'image Docker créée
-les commandes de déploiement
-les rapports de tests
-
-et publier ces informations sous forme d'artefacts ou de pages web.
-
-mvn test
-→ docker build
-→ docker push
-→ docker compose up
-
-
-
-
-# OPERATE
-Une fois l'application déployée, il faut l'exploiter :
-démarrage
-arrêt
-redémarrage
-consultation des logs
-
-## Exemples :
-    docker compose ps
-    docker compose logs
-    docker compose restart
-
-# MONITOR
-
-# CD = Continuous Delivery / Continuous Deployment
+If Docker Hub login fails with `unauthorized`, update the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets. The username must match the Docker Hub account, and the token must be valid and have write permission.
