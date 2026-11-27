@@ -197,6 +197,8 @@ lance les conteneurs ;
 affiche les logs d'Eureka ;
 arrête les conteneurs.
 
+Après la réussite des tests d'intégration sur `main`, le workflow publie les quatre images applicatives dans `houssein2eba/mscalcul-eurika-doa`. Ajoutez les secrets `DOCKERHUB_USERNAME` et `DOCKERHUB_TOKEN` dans les paramètres Actions du dépôt. Chaque image reçoit un tag de commit (`eureka-<sha>`, `calculatrice-<sha>`, `calcul-statistique-<sha>` ou `gateway-<sha>`) ainsi qu'un tag `*-latest`.
+
 Depuis la racine du projet :
 
 
