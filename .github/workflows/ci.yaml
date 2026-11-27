@@ -211,9 +211,34 @@ jobs:
       - name: Wait for gateway
         run: curl.exe --fail --retry 60 --retry-delay 2 --retry-all-errors http://localhost:8181/actuator/health
 
+      - name: Wait for calculator services to register with Eureka
+        run: |
+          $requiredApps = @("CALCULATRICE-SERVICE", "CALCULSTATISTIQUE-SERVICE")
+          $missingApps = $requiredApps
+
+          for ($attempt = 1; $attempt -le 60; $attempt++) {
+            $registryResponse = (& curl.exe --silent --show-error --fail `
+              -H "Accept: application/json" `
+              http://localhost:8761/eureka/apps | Out-String)
+            if ($LASTEXITCODE -eq 0) {
+              $registry = $registryResponse | ConvertFrom-Json
+              $registeredApps = @($registry.applications.application |
+                ForEach-Object { ([string]$_.name).ToUpperInvariant() })
+              $missingApps = @($requiredApps |
+                Where-Object { $registeredApps -notcontains $_ })
+              if ($missingApps.Count -eq 0) {
+                exit 0
+              }
+            }
+
+            Start-Sleep -Seconds 2
+          }
+
+          throw "Eureka did not register the required services: $($missingApps -join ', ')"
+
       - name: Verify calculator through gateway
         run: |
-          $result = (curl.exe --fail --retry 30 --retry-delay 2 --retry-all-errors `
+          $result = (curl.exe --silent --show-error --fail --retry 60 --retry-delay 2 --retry-all-errors `
             "http://localhost:8181/calculatrice-service/api/calcul/somme?a=2&b=3")
           if ($result -ne "5.0") {
             throw "Expected 5.0, received '$result'"
@@ -221,7 +246,7 @@ jobs:
 
       - name: Verify statistics through gateway
         run: |
-          $result = (curl.exe --fail --retry 30 --retry-delay 2 --retry-all-errors `
+          $result = (curl.exe --silent --show-error --fail --retry 60 --retry-delay 2 --retry-all-errors `
             "http://localhost:8181/calculstatistique-service/api/stats/moyenne?a=2&b=4")
           if ($result -ne "3.0") {
             throw "Expected 3.0, received '$result'"
@@ -288,7 +313,9 @@ jobs:
       # Preserve Docker status output for failed integration runs.
       - name: Show service status on failure
         if: failure()
-        run: docker compose ps
+        run: |
+          docker compose ps
+          docker compose logs --no-color --tail 100 eureka calculatrice calcul-statistique gateway
 
       # Always remove containers and the test database volume.
       - name: Stop application stack
